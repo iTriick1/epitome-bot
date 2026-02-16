@@ -22,7 +22,7 @@ async def help_command(ctx):
         "!additem <name> <price> [category] - Add an item with a price and optional category to the grill.\n"
         "!removeitem <name> - Remove an item from the market.\n"
         "!marketprice <name> - Show min, max, and average price for an item.\n"
-        "!grill - List all items in the grill.\n"
+        "!list - List all items in the grill.\n"
         "!save - Save the current market data.\n"
         "!help - Show this help message.\n\n"
         "---\nCredit: itriick"
@@ -149,8 +149,8 @@ async def add_item(ctx, *, args: str):
                 pass
             last_grill_message_id = []
         # Send header only once at the top
-        grill_emoji = "🍖"
-        header = f"{grill_emoji}  **The Market Grill**  {grill_emoji}"
+        grill_emoji = "🗒️"
+        header = f"{grill_emoji}  **The Market List**  {grill_emoji}"
         header_msg = await grill_channel.send(header)
         sent_msgs = [header_msg]
         for cat, items in cat_items.items():
@@ -180,8 +180,8 @@ async def add_item(ctx, *, args: str):
             last_grill_message_id = [msg.id for msg in sent_msgs]
     elif item_prices:
         # fallback: send to current channel if grill channel not found
-        grill_emoji = "🍖"
-        header = f"{grill_emoji}  **The Market Grill**  {grill_emoji}\n"
+        grill_emoji = "🗒️"
+        header = f"{grill_emoji}  **The Market List**  {grill_emoji}\n"
         table = "```\n{:<20} | {:<8} | {:<15} | {:<10}\n".format('Item', 'Listings', 'Avg Price', 'Category')
         table += "-"*65 + "\n"
         for item, prices in item_prices.items():
@@ -212,13 +212,13 @@ async def market_price(ctx, *, name: str):
         except Exception:
             pass
 
-@bot.command(name='grill')
-async def grill(ctx):
+@bot.command(name='list')
+async def list_items(ctx):
     if not item_prices:
-        await ctx.send('No items in the grill.')
+        await ctx.send('No items in the list.')
         return
-    grill_emoji = "🍖"
-    header = f"{grill_emoji}  **The Market Grill**  {grill_emoji}\n"
+    grill_emoji = "🗒️"
+    header = f"{grill_emoji}  **The Market List**  {grill_emoji}\n"
     table = "```\n{:<20} | {:<8} | {:<15} | {:<10}\n".format('Item', 'Listings', 'Avg Price', 'Category')
     table += "-"*65 + "\n"
     for item, prices in item_prices.items():
@@ -270,8 +270,8 @@ async def remove_item(ctx, *, name: str):
             last_grill_message_id = []
         # Send updated grill
         if item_prices:
-            grill_emoji = "🍖"
-            header = f"{grill_emoji}  **The Market Grill**  {grill_emoji}"
+            grill_emoji = "🗒️"
+            header = f"{grill_emoji}  **The Market List**  {grill_emoji}"
             header_msg = await grill_channel.send(header)
             sent_msgs = [header_msg]
             cat_items = defaultdict(list)
