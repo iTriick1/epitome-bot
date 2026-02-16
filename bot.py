@@ -248,8 +248,11 @@ async def remove_item(ctx, *, name: str):
             await ctx.message.delete()
         except Exception:
             pass
-        # Update grill channel
+
+        # UPDATE THIS ID TO YOUR GRILL CHANNEL ID 
         grill_channel_id = 1472854000616607891
+
+
         grill_channel = await bot.fetch_channel(grill_channel_id)
         # Delete previous grill messages if they exist
         global last_grill_message_id
