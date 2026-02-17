@@ -1,4 +1,6 @@
 last_grill_message_id = None
+leaderboard_message_id = None
+ath_message_id = None  # Track the ATH message in the ATH channel
 
 import os
 import discord
@@ -6,10 +8,26 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from collections import defaultdict
 import json
+from datetime import datetime, timedelta
+
 from datetime import datetime
-import random
 
 DATE_FILE = 'dates.json'
+
+LEADERBOARD_FILE = 'leaderboard.json'
+
+# Leaderboard helpers at top-level
+
+def load_leaderboard():
+    if os.path.exists(LEADERBOARD_FILE):
+        with open(LEADERBOARD_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+def save_leaderboard(leaderboard):
+    with open(LEADERBOARD_FILE, 'w', encoding='utf-8') as f:
+        json.dump(leaderboard, f, ensure_ascii=False)
+
 
 def load_dates():
     if os.path.exists(DATE_FILE):
@@ -37,9 +55,10 @@ async def help_command(ctx):
         "**Available Commands:**\n"
         "!additem <name> <price> [category] - Add an item with a price and optional category to the grill.\n"
         "!removeitem <name> - Remove an item from the market.\n"
-        "!marketprice <name> - Show min, max, and average price for an item.(results sent via DM)\n"
+        "!marketprice <name> - Show min, max, and average price for an item.\n"
         "!list - List all items in the grill.\n"
-        "!search <query> - Search for items by partial name or category (results sent via DM).\n"
+        "!search <query> - Search for items in the market.\n"
+        "!leaderboard - Show the leaderboard of users who added the most items.\n"
         "!save - Save the current market data.\n"
         "!help - Show this help message.\n\n"
         "---\nCredit: itriick"
@@ -87,6 +106,8 @@ def save_listing_amount(name, amount):
     if name.lower() not in category_map['amount']:
         category_map['amount'][name.lower()] = 0
     category_map['amount'][name.lower()] += amount
+    item_prices[name.lower()].append(price_value)
+    category_map[name.lower()] = category
     save_data()
     save_categories()
 
@@ -96,9 +117,88 @@ def save_data():
 
 item_prices = load_data()
 
+# Helper to extract float prices from a list of floats or dicts
+
+def extract_prices(prices):
+    return [p['price'] if isinstance(p, dict) and 'price' in p else p for p in prices]
+
+# Function to update the leaderboard message in the grill channel
+async def update_leaderboard_message(guild):
+    global leaderboard_message_id
+    leaderboard_channel_id = 1473216085242286234  # Correct leaderboard channel ID
+    leaderboard_channel = guild.get_channel(leaderboard_channel_id) or await guild.fetch_channel(leaderboard_channel_id)
+    leaderboard = load_leaderboard()
+    if not leaderboard:
+        leaderboard_text = 'No leaderboard data yet.'
+    else:
+        sorted_lb = sorted(leaderboard.items(), key=lambda x: x[1]['count'], reverse=True)
+        leaderboard_text = '**🏆 Leaderboard: Most Items Added 🏆**\n'
+        leaderboard_text += '```\n{:<4} {:<25} {:<10}\n'.format('Rank', 'User', 'Listings')
+        leaderboard_text += '-'*45 + '\n'
+        for idx, (user_id, entry) in enumerate(sorted_lb[:10], 1):
+            leaderboard_text += '{:<4} {:<25} {:<10}\n'.format(idx, entry['name'], entry['count'])
+        leaderboard_text += '```'
+    # Delete previous leaderboard message if it exists
+    if leaderboard_message_id:
+        try:
+            msg = await leaderboard_channel.fetch_message(leaderboard_message_id)
+            await msg.delete()
+        except Exception:
+            pass
+        leaderboard_message_id = None
+    # Send new leaderboard message
+    msg = await leaderboard_channel.send(leaderboard_text)
+    leaderboard_message_id = msg.id
+
+# Function to update the all-time high message in the specified channel ONLY if a new ATH is set
+async def update_ath_message(guild):
+    global ath_message_id, ath_cache
+    ath_channel_id = 1469491210920919101  # ATH channel
+    ath_channel = guild.get_channel(ath_channel_id) or await guild.fetch_channel(ath_channel_id)
+    new_ath_lines = []
+    updated = False
+    for item, prices in item_prices.items():
+        price_vals = extract_prices(prices)[1:]  # skip the first log
+        if price_vals:
+            ath = max(price_vals)
+            prev_ath = ath_cache.get(item.lower())
+            if prev_ath is None or ath > prev_ath:
+                ath_cache[item.lower()] = ath
+                new_ath_lines.append(f"{item.title()}: {int(ath):,} Archons")
+                updated = True
+    if updated and new_ath_lines:
+        ath_text = '@everyone\n**🚀 New All Time High! 🚀**\n' + '\n'.join(new_ath_lines)
+        # Delete previous ATH message if it exists
+        if ath_message_id:
+            try:
+                msg = await ath_channel.fetch_message(ath_message_id)
+                await msg.delete()
+            except Exception:
+                pass
+            ath_message_id = None
+        # Send new ATH message
+        msg = await ath_channel.send(ath_text)
+        ath_message_id = msg.id
+
+def recalculate_leaderboard():
+    leaderboard = {}
+    for prices in item_prices.values():
+        for entry in prices:
+            if isinstance(entry, dict) and 'user_id' in entry:
+                uid = str(entry['user_id'])
+                uname = entry.get('user_name', str(uid))
+                if uid not in leaderboard:
+                    leaderboard[uid] = {'name': uname, 'count': 0}
+                leaderboard[uid]['count'] += 1
+    save_leaderboard(leaderboard)
+    return leaderboard
+
+# Track last known ATHs in memory
+ath_cache = {}
+
 @bot.command(name='additem')
 async def add_item(ctx, *, args: str):
-    global last_grill_message_id
+    global last_grill_message_id, leaderboard_message_id, ath_message_id
     # Try to parse: <item name> <price> [category]
     try:
         *name_parts, price = args.rsplit(' ', 2)[-2:]
@@ -117,30 +217,27 @@ async def add_item(ctx, *, args: str):
         return
     # Normalize category name for all items
     category = category.lower()
-    item_key = name.lower()
-    # Ensure item_prices[item_key] is always a list
-    if not isinstance(item_prices[item_key], list):
-        item_prices[item_key] = []
-    # Check for all-time high (do not announce on first post)
-    previous_high = max(item_prices[item_key]) if item_prices[item_key] else None
-    is_first_post = len(item_prices[item_key]) == 0
-    item_prices[item_key].append(price_value)
-    category_map[item_key] = category
+    # Ensure item_prices[name.lower()] is always a list
+    if not isinstance(item_prices[name.lower()], list):
+        item_prices[name.lower()] = []
+    # Add user info to price entry
+    price_entry = {
+        'price': price_value,
+        'user_id': ctx.author.id,
+        'user_name': str(ctx.author),
+        'timestamp': datetime.now().isoformat()
+    }
+    item_prices[name.lower()].append(price_entry)
+    category_map[name.lower()] = category
     # Add date for this price entry
     now_str = datetime.now().strftime('%Y-%m-%d')
-    if item_key not in dates:
-        dates[item_key] = []
-    dates[item_key].append(now_str)
+    if name.lower() not in dates:
+        dates[name.lower()] = []
+    dates[name.lower()].append(now_str)
+
     save_dates()
     save_data()
     save_categories()
-    # Announce all-time high if applicable (not on first post)
-    announce_channel_id = 1469491210920919101
-    if previous_high is not None and price_value > previous_high:
-        announce_channel = await bot.fetch_channel(announce_channel_id)
-        price_str = f"{int(price_value):,}".replace(",", " ")
-        msg = f"@everyone 🚀 NEW ALL-TIME HIGH for **{name}**: {price_str} Archons!"
-        await announce_channel.send(msg)
     price_str = f"{int(price_value):,}".replace(",", " ")
     msg = await ctx.send(f'Added {name} for {price_str} Archons! (Category: {category})')
     import asyncio
@@ -186,6 +283,7 @@ async def add_item(ctx, *, args: str):
         header_msg = await grill_channel.send(header)
         sent_msgs = [header_msg]
         for cat, items in cat_items.items():
+            import random
             color_emojis = ["🟥", "🟧", "🟨", "🟩", "🟦", "🟪", "🟫", "⬛", "⬜"]
             color_emoji = random.choice(color_emojis)
             msg = f"{color_emoji} **[{cat.title()}]**\n"
@@ -199,8 +297,9 @@ async def add_item(ctx, *, args: str):
                     item_group[key] = []
                 item_group[key].extend(prices)
             for item_name, prices in item_group.items():
-                listing_count = len(prices)
-                avg = sum(prices) / len(prices) if prices else 0
+                price_vals = extract_prices(prices)
+                listing_count = len(price_vals)
+                avg = sum(price_vals) / len(price_vals) if price_vals else 0
                 avg_str = f"{int(avg):,}".replace(",", " ") + " Archons"
                 table += "{:<20} | {:<8} | {:<15}\n".format(item_name.title(), listing_count, avg_str)
             table += "```"
@@ -217,10 +316,10 @@ async def add_item(ctx, *, args: str):
         table += "-"*65 + "\n"
         for item, prices in item_prices.items():
             purge_old_prices(item)
-            filtered_prices = item_prices[item]
+            filtered_prices = extract_prices(item_prices[item])
             if not filtered_prices:
                 # Use all-time average if no recent listings
-                all_prices = prices
+                all_prices = extract_prices(prices)
                 avg = sum(all_prices) / len(all_prices) if all_prices else 0
                 avg_str = f"{int(avg):,}".replace(",", " ") + " Archons (all-time avg)"
                 count = 0
@@ -232,6 +331,12 @@ async def add_item(ctx, *, args: str):
             table += "{:<20} | {:<8} | {:<15} | {:<10}\n".format(item.title(), count, avg_str, cat)
         table += "```"
         await ctx.send(header + table)
+
+    # After updating the grill, recalculate and update leaderboard
+    recalculate_leaderboard()
+    await update_leaderboard_message(ctx.guild)
+    # After updating the grill and leaderboard, also update the ATH message
+    await update_ath_message(ctx.guild)
 
 @bot.command(name='marketprice')
 async def market_price(ctx, *, name: str):
@@ -275,10 +380,10 @@ async def list_items(ctx):
     table += "-"*65 + "\n"
     for item, prices in item_prices.items():
         purge_old_prices(item)
-        filtered_prices = item_prices[item]
+        filtered_prices = extract_prices(item_prices[item])
         if not filtered_prices:
             # Use all-time average if no recent listings
-            all_prices = prices
+            all_prices = extract_prices(prices)
             avg = sum(all_prices) / len(all_prices) if all_prices else 0
             avg_str = f"{int(avg):,}".replace(",", " ") + " Archons (all-time avg)"
             count = 0
@@ -293,6 +398,7 @@ async def list_items(ctx):
 
 @bot.command(name='removeitem')
 async def remove_item(ctx, *, name: str):
+    global last_grill_message_id, leaderboard_message_id, ath_message_id
     name_key = name.lower()
     removed = False
     # Remove item from item_prices and category_map
@@ -341,6 +447,7 @@ async def remove_item(ctx, *, name: str):
                 cat = category_map.get(item.lower(), 'general').lower()
                 cat_items[cat].append((item, prices))
             for cat, items in cat_items.items():
+                import random
                 color_emojis = ["🟥", "🟧", "🟨", "🟩", "🟦", "🟪", "🟫", "⬛", "⬜"]
                 color_emoji = random.choice(color_emojis)
                 msg = f"{color_emoji} **[{cat.title()}]**\n"
@@ -354,8 +461,9 @@ async def remove_item(ctx, *, name: str):
                         item_group[key] = []
                     item_group[key].extend(prices)
                 for item_name, prices in item_group.items():
-                    listing_count = len(prices)
-                    avg = sum(prices) / len(prices) if prices else 0
+                    price_vals = extract_prices(prices)
+                    listing_count = len(price_vals)
+                    avg = sum(price_vals) / len(price_vals) if price_vals else 0
                     avg_str = f"{int(avg):,}".replace(",", " ") + " Archons"
                     table += "{:<20} | {:<8} | {:<15}\n".format(item_name.title(), listing_count, avg_str)
                 table += "```"
@@ -374,35 +482,51 @@ async def remove_item(ctx, *, name: str):
             pass
 
 
+@bot.command(name='leaderboard')
+async def leaderboard_command(ctx):
+    leaderboard = load_leaderboard()
+    if not leaderboard:
+        await ctx.send('No leaderboard data yet.')
+        return
+    sorted_lb = sorted(leaderboard.items(), key=lambda x: x[1]['count'], reverse=True)
+    msg = '**🏆 Leaderboard: Most Items Added 🏆**\n'
+    msg += '```\n{:<4} {:<25} {:<10}\n'.format('Rank', 'User', 'Listings')
+    msg += '-'*45 + '\n'
+    for idx, (user_id, entry) in enumerate(sorted_lb[:10], 1):
+        msg += '{:<4} {:<25} {:<10}\n'.format(idx, entry['name'], entry['count'])
+    msg += '```'
+    await ctx.send(msg)
+
 @bot.command(name='search')
-async def search_items(ctx, *, query: str):
-    """Search for items by partial name or category."""
-    query_lower = query.lower()
-    # Find items by partial name
-    name_matches = [item for item in item_prices if query_lower in item.lower()]
-    # Find items by category
-    category_matches = [item for item, cat in category_map.items() if isinstance(cat, str) and query_lower in cat.lower()]
-    # Combine and deduplicate
-    results = set(name_matches) | set(category_matches)
-    if not results:
-        await ctx.author.send(f'No items found matching "{query}".')
+async def search_item(ctx, *, query: str):
+    # Search for items containing the query (case-insensitive)
+    results = []
+    for item, prices in item_prices.items():
+        if query.lower() in item.lower():
+            cat = category_map.get(item, 'general')
+            price_vals = extract_prices(prices)
+            avg = sum(price_vals) / len(price_vals) if price_vals else 0
+            avg_str = f"{int(avg):,}".replace(",", " ") + " Archons"
+            results.append((item, len(price_vals), avg_str, cat))
+    try:
+        if results:
+            grill_emoji = "🗒️"
+            header = f"{grill_emoji}  **Search Results for '{query}'**  {grill_emoji}\n"
+            table = "```\n{:<20} | {:<8} | {:<15} | {:<10}\n".format('Item', 'Listings', 'Avg Price', 'Category')
+            table += "-"*65 + "\n"
+            for item, count, avg_str, cat in results:
+                table += "{:<20} | {:<8} | {:<15} | {:<10}\n".format(item.title(), count, avg_str, cat)
+            table += "```"
+            await ctx.author.send(header + table)
+        else:
+            await ctx.author.send(f"No items found matching '{query}'.")
+    except discord.Forbidden:
+        await ctx.send(f"{ctx.author.mention}, I couldn't DM you. Please check your privacy settings.")
+    finally:
         try:
             await ctx.message.delete()
         except Exception:
             pass
-        return
-    msg = '**Search Results:**\n'
-    for item in sorted(results):
-        cat = category_map.get(item, 'general')
-        prices = item_prices.get(item, [])
-        avg = sum(prices) / len(prices) if prices else 0
-        avg_str = f"{int(avg):,}".replace(",", " ") + " Archons" if prices else "No data"
-        msg += f'- **{item.title()}** (Category: {cat}) — Avg Price: {avg_str}\n'
-    await ctx.author.send(msg)
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
 
 def purge_old_prices(item_name):
     if item_name not in item_prices or item_name not in dates:
