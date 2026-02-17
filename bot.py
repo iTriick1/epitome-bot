@@ -6,6 +6,23 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from collections import defaultdict
 import json
+from datetime import datetime, timedelta
+
+from datetime import datetime
+
+DATE_FILE = 'dates.json'
+
+def load_dates():
+    if os.path.exists(DATE_FILE):
+        with open(DATE_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+def save_dates():
+    with open(DATE_FILE, 'w', encoding='utf-8') as f:
+        json.dump(dates, f, ensure_ascii=False)
+
+dates = load_dates()
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -107,6 +124,12 @@ async def add_item(ctx, *, args: str):
         item_prices[name.lower()] = []
     item_prices[name.lower()].append(price_value)
     category_map[name.lower()] = category
+    # Add date for this price entry
+    now_str = datetime.now().strftime('%Y-%m-%d')
+    if name.lower() not in dates:
+        dates[name.lower()] = []
+    dates[name.lower()].append(now_str)
+    save_dates()
     save_data()
     save_categories()
     price_str = f"{int(price_value):,}".replace(",", " ")
@@ -185,20 +208,41 @@ async def add_item(ctx, *, args: str):
         table = "```\n{:<20} | {:<8} | {:<15} | {:<10}\n".format('Item', 'Listings', 'Avg Price', 'Category')
         table += "-"*65 + "\n"
         for item, prices in item_prices.items():
-            avg = sum(prices) / len(prices)
-            avg_str = f"{int(avg):,}".replace(",", " ") + " Archons"
+            purge_old_prices(item)
+            filtered_prices = item_prices[item]
+            if not filtered_prices:
+                # Use all-time average if no recent listings
+                all_prices = prices
+                avg = sum(all_prices) / len(all_prices) if all_prices else 0
+                avg_str = f"{int(avg):,}".replace(",", " ") + " Archons (all-time avg)"
+                count = 0
+            else:
+                avg = sum(filtered_prices) / len(filtered_prices)
+                avg_str = f"{int(avg):,}".replace(",", " ") + " Archons"
+                count = len(filtered_prices)
             cat = category_map.get(item, 'general')
-            table += "{:<20} | {:<8} | {:<15} | {:<10}\n".format(item.title(), len(prices), avg_str, cat)
+            table += "{:<20} | {:<8} | {:<15} | {:<10}\n".format(item.title(), count, avg_str, cat)
         table += "```"
         await ctx.send(header + table)
 
 @bot.command(name='marketprice')
 async def market_price(ctx, *, name: str):
-    prices = item_prices.get(name.lower())
+    item_name = name.lower()
+    purge_old_prices(item_name)
+    prices = item_prices.get(item_name, [])
     import discord
     try:
         if not prices:
-            await ctx.author.send(f'No prices found for {name}.')
+            # If no recent prices, try to use all historical prices for average
+            all_prices = prices if prices else []
+            if not all_prices and item_name in item_prices:
+                all_prices = item_prices.get(item_name, [])
+            if all_prices:
+                avg = sum(all_prices) / len(all_prices)
+                msg = f"No recent listings for {name}. Using all-time average: {avg:.2f}"
+            else:
+                msg = f'No prices found for {name}.'
+            await ctx.author.send(msg)
         else:
             avg = sum(prices) / len(prices)
             msg = f"Market price for {name}:\nMin: {min(prices):.2f}\nMax: {max(prices):.2f}\nAvg: {avg:.2f}"
@@ -222,10 +266,20 @@ async def list_items(ctx):
     table = "```\n{:<20} | {:<8} | {:<15} | {:<10}\n".format('Item', 'Listings', 'Avg Price', 'Category')
     table += "-"*65 + "\n"
     for item, prices in item_prices.items():
-        avg = sum(prices) / len(prices)
-        avg_str = f"{int(avg):,}".replace(",", " ") + " Archons"
+        purge_old_prices(item)
+        filtered_prices = item_prices[item]
+        if not filtered_prices:
+            # Use all-time average if no recent listings
+            all_prices = prices
+            avg = sum(all_prices) / len(all_prices) if all_prices else 0
+            avg_str = f"{int(avg):,}".replace(",", " ") + " Archons (all-time avg)"
+            count = 0
+        else:
+            avg = sum(filtered_prices) / len(filtered_prices)
+            avg_str = f"{int(avg):,}".replace(",", " ") + " Archons"
+            count = len(filtered_prices)
         cat = category_map.get(item, 'general')
-        table += "{:<20} | {:<8} | {:<15} | {:<10}\n".format(item.title(), len(prices), avg_str, cat)
+        table += "{:<20} | {:<8} | {:<15} | {:<10}\n".format(item.title(), count, avg_str, cat)
     table += "```"
     await ctx.send(header + table)
 
@@ -311,5 +365,24 @@ async def remove_item(ctx, *, name: str):
             await ctx.message.delete()
         except Exception:
             pass
+
+def purge_old_prices(item_name):
+    if item_name not in item_prices or item_name not in dates:
+        return
+    today = datetime.now()
+    new_prices = []
+    new_dates = []
+    for price, date_str in zip(item_prices[item_name], dates[item_name]):
+        try:
+            date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+        except Exception:
+            continue
+        if (today - date_obj).days <= 30:
+            new_prices.append(price)
+            new_dates.append(date_str)
+    item_prices[item_name] = new_prices
+    dates[item_name] = new_dates
+    save_data()
+    save_dates()
 
 bot.run(TOKEN)
