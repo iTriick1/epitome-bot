@@ -6,9 +6,8 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from collections import defaultdict
 import json
-from datetime import datetime, timedelta
-
 from datetime import datetime
+import random
 
 DATE_FILE = 'dates.json'
 
@@ -38,8 +37,9 @@ async def help_command(ctx):
         "**Available Commands:**\n"
         "!additem <name> <price> [category] - Add an item with a price and optional category to the grill.\n"
         "!removeitem <name> - Remove an item from the market.\n"
-        "!marketprice <name> - Show min, max, and average price for an item.\n"
+        "!marketprice <name> - Show min, max, and average price for an item.(results sent via DM)\n"
         "!list - List all items in the grill.\n"
+        "!search <query> - Search for items by partial name or category (results sent via DM).\n"
         "!save - Save the current market data.\n"
         "!help - Show this help message.\n\n"
         "---\nCredit: itriick"
@@ -87,8 +87,6 @@ def save_listing_amount(name, amount):
     if name.lower() not in category_map['amount']:
         category_map['amount'][name.lower()] = 0
     category_map['amount'][name.lower()] += amount
-    item_prices[name.lower()].append(price_value)
-    category_map[name.lower()] = category
     save_data()
     save_categories()
 
@@ -123,8 +121,9 @@ async def add_item(ctx, *, args: str):
     # Ensure item_prices[item_key] is always a list
     if not isinstance(item_prices[item_key], list):
         item_prices[item_key] = []
-    # Check for all-time high
+    # Check for all-time high (do not announce on first post)
     previous_high = max(item_prices[item_key]) if item_prices[item_key] else None
+    is_first_post = len(item_prices[item_key]) == 0
     item_prices[item_key].append(price_value)
     category_map[item_key] = category
     # Add date for this price entry
@@ -135,9 +134,9 @@ async def add_item(ctx, *, args: str):
     save_dates()
     save_data()
     save_categories()
-    # Announce all-time high if applicable
+    # Announce all-time high if applicable (not on first post)
     announce_channel_id = 1469491210920919101
-    if previous_high is None or price_value > previous_high:
+    if previous_high is not None and price_value > previous_high:
         announce_channel = await bot.fetch_channel(announce_channel_id)
         price_str = f"{int(price_value):,}".replace(",", " ")
         msg = f"@everyone 🚀 NEW ALL-TIME HIGH for **{name}**: {price_str} Archons!"
@@ -187,7 +186,6 @@ async def add_item(ctx, *, args: str):
         header_msg = await grill_channel.send(header)
         sent_msgs = [header_msg]
         for cat, items in cat_items.items():
-            import random
             color_emojis = ["🟥", "🟧", "🟨", "🟩", "🟦", "🟪", "🟫", "⬛", "⬜"]
             color_emoji = random.choice(color_emojis)
             msg = f"{color_emoji} **[{cat.title()}]**\n"
@@ -343,7 +341,6 @@ async def remove_item(ctx, *, name: str):
                 cat = category_map.get(item.lower(), 'general').lower()
                 cat_items[cat].append((item, prices))
             for cat, items in cat_items.items():
-                import random
                 color_emojis = ["🟥", "🟧", "🟨", "🟩", "🟦", "🟪", "🟫", "⬛", "⬜"]
                 color_emoji = random.choice(color_emojis)
                 msg = f"{color_emoji} **[{cat.title()}]**\n"
@@ -375,6 +372,37 @@ async def remove_item(ctx, *, name: str):
             await ctx.message.delete()
         except Exception:
             pass
+
+
+@bot.command(name='search')
+async def search_items(ctx, *, query: str):
+    """Search for items by partial name or category."""
+    query_lower = query.lower()
+    # Find items by partial name
+    name_matches = [item for item in item_prices if query_lower in item.lower()]
+    # Find items by category
+    category_matches = [item for item, cat in category_map.items() if isinstance(cat, str) and query_lower in cat.lower()]
+    # Combine and deduplicate
+    results = set(name_matches) | set(category_matches)
+    if not results:
+        await ctx.author.send(f'No items found matching "{query}".')
+        try:
+            await ctx.message.delete()
+        except Exception:
+            pass
+        return
+    msg = '**Search Results:**\n'
+    for item in sorted(results):
+        cat = category_map.get(item, 'general')
+        prices = item_prices.get(item, [])
+        avg = sum(prices) / len(prices) if prices else 0
+        avg_str = f"{int(avg):,}".replace(",", " ") + " Archons" if prices else "No data"
+        msg += f'- **{item.title()}** (Category: {cat}) — Avg Price: {avg_str}\n'
+    await ctx.author.send(msg)
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
 
 def purge_old_prices(item_name):
     if item_name not in item_prices or item_name not in dates:
