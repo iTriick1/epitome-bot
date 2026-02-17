@@ -119,19 +119,29 @@ async def add_item(ctx, *, args: str):
         return
     # Normalize category name for all items
     category = category.lower()
-    # Ensure item_prices[name.lower()] is always a list
-    if not isinstance(item_prices[name.lower()], list):
-        item_prices[name.lower()] = []
-    item_prices[name.lower()].append(price_value)
-    category_map[name.lower()] = category
+    item_key = name.lower()
+    # Ensure item_prices[item_key] is always a list
+    if not isinstance(item_prices[item_key], list):
+        item_prices[item_key] = []
+    # Check for all-time high
+    previous_high = max(item_prices[item_key]) if item_prices[item_key] else None
+    item_prices[item_key].append(price_value)
+    category_map[item_key] = category
     # Add date for this price entry
     now_str = datetime.now().strftime('%Y-%m-%d')
-    if name.lower() not in dates:
-        dates[name.lower()] = []
-    dates[name.lower()].append(now_str)
+    if item_key not in dates:
+        dates[item_key] = []
+    dates[item_key].append(now_str)
     save_dates()
     save_data()
     save_categories()
+    # Announce all-time high if applicable
+    announce_channel_id = 1469491210920919101
+    if previous_high is None or price_value > previous_high:
+        announce_channel = await bot.fetch_channel(announce_channel_id)
+        price_str = f"{int(price_value):,}".replace(",", " ")
+        msg = f"@everyone 🚀 NEW ALL-TIME HIGH for **{name}**: {price_str} Archons!"
+        await announce_channel.send(msg)
     price_str = f"{int(price_value):,}".replace(",", " ")
     msg = await ctx.send(f'Added {name} for {price_str} Archons! (Category: {category})')
     import asyncio
