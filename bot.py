@@ -53,15 +53,15 @@ bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 async def help_command(ctx):
     msg = (
         "**Available Commands:**\n"
-        "!additem <name> <price> [category] - Add an item with a price and optional category to the grill.\n"
-        "!removeitem <name> - Remove an item from the market.\n"
+        "!additem <name> <price> [category] - Add an item with a price and optional category to the list.\n"
+        "!removeitem <name> - Remove an item from the list.\n"
         "!marketprice <name> - Show min, max, and average price for an item.\n"
-        "!list - List all items in the grill.\n"
-        "!search <query> - Search for items in the market.\n"
+        "!list - List all items in the list.\n"
+        "!search <query> - Search for items in the list.\n"
         "!leaderboard - Show the leaderboard of users who added the most items.\n"
-        "!save - Save the current market data.\n"
+        "!save - Save the current list data.\n"
         "!help - Show this help message.\n\n"
-        "---\nCredit: itriick"
+        "---\nCredit: iTriick"
     )
     await ctx.send(msg)
 
